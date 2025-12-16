@@ -1,0 +1,12 @@
+# Example Caddyfile for reverse proxy with automatic HTTPS
+# Replace yourdomain.com with your actual domain
+
+# API
+api.yourdomain.com {
+    reverse_proxy api:3000
+}
+
+# Alternatively, for local development without domain:
+# :80 {
+#     reverse_proxy api:3000
+# }

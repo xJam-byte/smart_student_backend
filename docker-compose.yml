@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: smartwatch-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: smartwatch
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - smartwatch-network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c shared_buffers=512MB
+      -c effective_cache_size=2GB
+      -c work_mem=8MB
+      -c maintenance_work_mem=256MB
+      -c max_connections=150
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+
+  redis:
+    image: redis:7-alpine
+    container_name: smartwatch-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - smartwatch-network
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: smartwatch-api
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/smartwatch?schema=public&connection_limit=10&pool_timeout=30
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
+
+      SCHOOL_GEOFENCE_RADIUS_METERS: 20
+      TELEMETRY_RETENTION_DAYS: 10
+      HIGH_HEART_RATE_THRESHOLD: 120
+      NO_MOVEMENT_TIMEOUT_MINUTES: 30
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - smartwatch-network
+    command: sh -c "npx prisma migrate deploy && node dist/main"
+
+networks:
+  smartwatch-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

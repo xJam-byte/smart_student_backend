@@ -1,0 +1,466 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  PARENT
+}
+
+enum DevicePlatform {
+  WEAR_OS
+}
+
+enum DeviceStatus {
+  ACTIVE
+  INACTIVE
+  LOST
+  MAINTENANCE
+}
+
+enum TelemetrySource {
+  GPS
+  NETWORK
+  WIFI
+  FUSED
+}
+
+enum GeofenceEventType {
+  ENTER_SCHOOL
+  EXIT_SCHOOL
+  ENTER_HOME
+  EXIT_HOME
+}
+
+enum AlertType {
+  SOS
+  HIGH_HEART_RATE
+  NO_MOVEMENT
+  LEFT_SCHOOL_ZONE
+  ENTERED_SCHOOL_ZONE
+  LOW_BATTERY
+  DEVICE_OFFLINE
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  NEW
+  SENT
+  READ
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum NotificationType {
+  ALERT
+  GEOFENCE
+  SYSTEM
+  MESSAGE
+}
+
+enum NotificationChannel {
+  PUSH
+  EMAIL
+  SMS
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
+enum BusEventType {
+  ENTER_BUS
+  EXIT_BUS
+  BUS_ARRIVED_SCHOOL
+  BUS_LEFT_SCHOOL
+}
+
+enum DeviceCommandType {
+  NOTIFICATION
+  FIND_DEVICE
+  TAKE_PHOTO
+  VOICE_MESSAGE
+  SET_VOLUME
+  REBOOT
+  UPDATE_SETTINGS
+}
+
+enum DeviceCommandStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  EXECUTED
+  FAILED
+  EXPIRED
+}
+
+// ============================================
+// MODELS
+// ============================================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String?  @unique
+  phone     String?  @unique
+  password  String
+  role      UserRole @default(PARENT)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  parentProfile ParentProfile?
+
+  @@index([email])
+  @@index([phone])
+  @@map("users")
+}
+
+model ParentProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  firstName String
+  lastName  String
+  avatar    String?
+  timezone  String   @default("UTC")
+  language  String   @default("en")
+
+  // Notification settings
+  enablePushNotifications  Boolean @default(true)
+  enableEmailNotifications Boolean @default(false)
+  enableSmsNotifications   Boolean @default(false)
+
+  // FCM Token for push notifications
+  fcmToken String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  children      Child[]
+  notifications Notification[]
+
+  @@index([userId])
+  @@map("parent_profiles")
+}
+
+model Child {
+  id          String   @id @default(cuid())
+  parentId    String
+  firstName   String
+  lastName    String
+  dateOfBirth DateTime?
+  gender      String?
+  avatar      String?
+
+  // Location data - using separate lat/lng fields for better indexing
+  homeLatitude   Float?
+  homeLongitude  Float?
+  schoolLatitude Float?
+  schoolLongitude Float?
+
+  // Geofence radius in meters
+  schoolGeofenceRadius Float @default(100)
+  homeGeofenceRadius   Float @default(50)
+
+  // State flags - instead of relying on lastEvent
+  isInSchool Boolean @default(false)
+  isAtHome   Boolean @default(false)
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  parent         ParentProfile    @relation(fields: [parentId], references: [id], onDelete: Cascade)
+  devices        Device[]
+  telemetry      TelemetryPoint[]
+  geofenceEvents GeofenceEvent[]
+  alerts         Alert[]
+  busRoutes      BusRoute[]
+  busEvents      BusEvent[]
+
+  @@index([parentId])
+  @@index([schoolLatitude, schoolLongitude])
+  @@index([homeLatitude, homeLongitude])
+  @@index([isInSchool])
+  @@index([isAtHome])
+  @@map("children")
+}
+
+model Device {
+  id         String         @id @default(cuid())
+  childId    String?
+  platform   DevicePlatform @default(WEAR_OS)
+  hardwareId String         @unique // Serial number, Android ID, IMEI
+
+  // Device authentication token
+  deviceToken String @unique
+
+  status     DeviceStatus @default(ACTIVE)
+  model      String?
+  appVersion String?
+  osVersion  String?
+
+  // Last seen info
+  lastSeenAt   DateTime?
+  lastLatitude Float?
+  lastLongitude Float?
+  batteryLevel Int?
+
+  // Device state flags - for analytics and debugging
+  lastInSchool Boolean?
+  lastAtHome   Boolean?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  child          Child?           @relation(fields: [childId], references: [id], onDelete: SetNull)
+  telemetry      TelemetryPoint[]
+  geofenceEvents GeofenceEvent[]
+  alerts         Alert[]
+  busEvents      BusEvent[]
+  commands       DeviceCommand[]
+
+  @@index([childId])
+  @@index([hardwareId])
+  @@index([deviceToken])
+  @@index([status])
+  @@map("devices")
+}
+
+model TelemetryPoint {
+  id        String   @id @default(cuid())
+  childId   String
+  deviceId  String
+
+  // Location
+  latitude  Float
+  longitude Float
+  altitude  Float?
+  accuracy  Float? // in meters
+  speed     Float? // in m/s
+  bearing   Float? // in degrees
+
+  // Sensor data
+  batteryLevel Int?
+  heartRate    Int?
+  stepCount    Int?
+
+  // Meta
+  source    TelemetrySource @default(GPS)
+  timestamp DateTime        @default(now())
+  createdAt DateTime        @default(now())
+
+  // Relations
+  child  Child  @relation(fields: [childId], references: [id], onDelete: Cascade)
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([childId, timestamp(sort: Desc)])
+  @@index([deviceId, timestamp(sort: Desc)])
+  @@index([timestamp])
+  @@map("telemetry_points")
+}
+
+model GeofenceEvent {
+  id        String             @id @default(cuid())
+  childId   String
+  deviceId  String
+  type      GeofenceEventType
+
+  // Location at the time of event
+  latitude  Float
+  longitude Float
+
+  timestamp DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  // Relations
+  child  Child  @relation(fields: [childId], references: [id], onDelete: Cascade)
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([childId, timestamp(sort: Desc)])
+  @@index([deviceId, timestamp(sort: Desc)])
+  @@index([type])
+  @@map("geofence_events")
+}
+
+model Alert {
+  id       String        @id @default(cuid())
+  childId  String
+  deviceId String?
+  type     AlertType
+  severity AlertSeverity @default(MEDIUM)
+  status   AlertStatus   @default(NEW)
+
+  // Additional data stored as JSON
+  payload Json?
+
+  // Location at the time of alert
+  latitude  Float?
+  longitude Float?
+
+  // Timestamps
+  triggeredAt    DateTime  @default(now())
+  sentAt         DateTime?
+  readAt         DateTime?
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  child  Child   @relation(fields: [childId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([childId, triggeredAt(sort: Desc)])
+  @@index([deviceId])
+  @@index([type, status])
+  @@index([severity, status])
+  @@map("alerts")
+}
+
+model Notification {
+  id       String              @id @default(cuid())
+  parentId String
+  type     NotificationType
+  channel  NotificationChannel @default(PUSH)
+  status   NotificationStatus  @default(PENDING)
+
+  title   String
+  body    String
+  payload Json? // Additional data
+
+  // Timestamps
+  scheduledAt DateTime  @default(now())
+  sentAt      DateTime?
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  parent ParentProfile @relation(fields: [parentId], references: [id], onDelete: Cascade)
+
+  @@index([parentId, createdAt(sort: Desc)])
+  @@index([status, scheduledAt])
+  @@map("notifications")
+}
+
+// ============================================
+// BUS MODULE (Future expansion)
+// ============================================
+
+model BusRoute {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+
+  // Route coordinates as JSON array of {lat, lng}
+  coordinates Json
+
+  // Schedule
+  isActive     Boolean @default(true)
+  scheduleDays Json? // Array of days: [1,2,3,4,5] for Mon-Fri
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  children  Child[]
+  busEvents BusEvent[]
+
+  @@index([isActive])
+  @@map("bus_routes")
+}
+
+model BusEvent {
+  id       String       @id @default(cuid())
+  childId  String
+  deviceId String?
+  routeId  String
+  type     BusEventType
+
+  // Location
+  latitude  Float
+  longitude Float
+
+  timestamp DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  // Relations
+  child  Child     @relation(fields: [childId], references: [id], onDelete: Cascade)
+  device Device?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  route  BusRoute  @relation(fields: [routeId], references: [id], onDelete: Cascade)
+
+  @@index([childId, timestamp(sort: Desc)])
+  @@index([routeId, timestamp(sort: Desc)])
+  @@map("bus_events")
+}
+
+// ============================================
+// DEVICE COMMANDS MODULE
+// ============================================
+
+model DeviceCommand {
+  id       String              @id @default(cuid())
+  deviceId String
+  parentId String
+  type     DeviceCommandType
+  status   DeviceCommandStatus @default(PENDING)
+
+  // Command payload (JSON format)
+  // For NOTIFICATION: { title: string, message: string, icon?: string }
+  // For FIND_DEVICE: { duration?: number, vibrate?: boolean }
+  // For VOICE_MESSAGE: { audioUrl: string, duration: number }
+  // For SET_VOLUME: { level: number (0-100) }
+  payload Json?
+
+  // Priority level (1-5, where 5 is highest)
+  priority Int @default(3)
+
+  // Expiration time (commands expire after a certain time)
+  expiresAt DateTime?
+
+  // Timestamps
+  createdAt   DateTime  @default(now())
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  executedAt  DateTime?
+  failedAt    DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  // Error message if failed
+  errorMessage String?
+
+  // Relations
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, createdAt(sort: Desc)])
+  @@index([status, priority(sort: Desc)])
+  @@index([expiresAt])
+  @@map("device_commands")
+}
